@@ -1,0 +1,6 @@
+{
+  "name": "Adobe Stock Tag Generator",
+  "description": "Adobe Stock rasmlari uchun sun'iy intellekt (Gemini AI) yordamida avtomatik Title (nom), Keywords (kalit so'zlar) va Kategoriyalarni shakllantiruvchi va CSV eksport qiluvchi xizmat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
