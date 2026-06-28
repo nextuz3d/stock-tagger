@@ -152,10 +152,15 @@ export default function App() {
   // Save Settings
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    const parsedKeys = tempApiKeysText
+    let parsedKeys = tempApiKeysText
       .split("\n")
       .map((k) => k.trim())
       .filter((k) => k.length > 0);
+
+    if (parsedKeys.length > 100) {
+      parsedKeys = parsedKeys.slice(0, 100);
+      showToast("error", lang === "uz" ? "Maksimal 100 ta API kalit saqlanishi mumkin. Ortig'i kesildi!" : "A maximum of 100 API keys can be saved. Excess keys were truncated!");
+    }
 
     const updated: AppSettings = {
       customApiKey: tempApiKey.trim(),
@@ -599,59 +604,86 @@ Return the response in valid JSON according to the specified schema.${userPrompt
     setCancelBatch(false);
     cancelBatchRef.current = false;
     let successCount = 0;
-    let index = 0;
 
-    for (const item of queue) {
-      if (cancelBatchRef.current) {
-        showToast("error", t.batchCanceled);
-        break;
-      }
+    // Define pool of API keys (from batch rotation text area or single field)
+    const keys = settings.customApiKeys && settings.customApiKeys.length > 0
+      ? settings.customApiKeys
+      : [settings.customApiKey || ""];
 
-      // If not the first item, respect rate limits with adaptive cooldown based on number of keys
-      if (index > 0) {
-        const keyCount = settings.customApiKeys && settings.customApiKeys.length > 0 ? settings.customApiKeys.length : 1;
-        let waitTimeMs = 4500;
-        if (keyCount > 1) {
-          // Reduce cooldown proportional to the number of keys, but keep at least 1 second of breather
-          waitTimeMs = Math.max(1000, Math.ceil(4500 / keyCount));
+    // Initialize individual key availability timestamps
+    const keyAvailableAt = keys.map(() => 0);
+
+    let nextQueueIndex = 0;
+    const CONCURRENCY = 3; // Maximum 3 concurrent requests
+
+    // Worker function running in parallel
+    const runWorker = async () => {
+      while (nextQueueIndex < queue.length && !cancelBatchRef.current) {
+        // Atomic grab of next image index
+        const currentIndex = nextQueueIndex++;
+        if (currentIndex >= queue.length || cancelBatchRef.current) {
+          break;
         }
-        let secondsRemaining = Math.ceil(waitTimeMs / 1000);
-        setCooldownRemaining(secondsRemaining);
 
-        while (waitTimeMs > 0) {
-          if (cancelBatchRef.current) {
-            break;
+        const item = queue[currentIndex];
+
+        // 1. Find the key that becomes available earliest
+        let selectedKeyIndex = 0;
+        let earliestTime = Infinity;
+        for (let i = 0; i < keyAvailableAt.length; i++) {
+          if (keyAvailableAt[i] < earliestTime) {
+            earliestTime = keyAvailableAt[i];
+            selectedKeyIndex = i;
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          waitTimeMs -= 100;
-          const currentSecs = Math.ceil(waitTimeMs / 1000);
-          if (currentSecs !== secondsRemaining) {
-            secondsRemaining = currentSecs;
-            setCooldownRemaining(secondsRemaining);
+        }
+
+        const now = Date.now();
+        let delay = 0;
+        if (earliestTime > now) {
+          delay = earliestTime - now;
+        }
+
+        // 2. Claim the key, marking its next available time to 4200ms (15 RPM safe cushion) after scheduled call
+        const scheduledCallTime = now + delay;
+        keyAvailableAt[selectedKeyIndex] = scheduledCallTime + 4200;
+
+        // 3. Sleep if delay is required for this key to satisfy the 15 RPM limit
+        if (delay > 0) {
+          let remainingWait = delay;
+          setCooldownRemaining(Math.ceil(remainingWait / 1000));
+
+          while (remainingWait > 0 && !cancelBatchRef.current) {
+            const step = Math.min(remainingWait, 200);
+            await new Promise((resolve) => setTimeout(resolve, step));
+            remainingWait -= step;
+            setCooldownRemaining(Math.ceil(remainingWait / 1000));
           }
+        }
+
+        if (cancelBatchRef.current) {
+          break;
         }
 
         setCooldownRemaining(0);
 
-        if (cancelBatchRef.current) {
-          showToast("error", t.batchCanceled);
-          break;
+        // 4. Run the actual single analysis with the scheduled safe key
+        const activeKey = keys[selectedKeyIndex];
+        const success = await analyzeSingleImage(item.id, activeKey);
+        if (success) {
+          successCount++;
         }
       }
+    };
 
-      // Select active rotated key
-      let activeRotatedKey = undefined;
-      if (settings.customApiKeys && settings.customApiKeys.length > 0) {
-        const keyIdx = index % settings.customApiKeys.length;
-        activeRotatedKey = settings.customApiKeys[keyIdx];
-      }
-
-      const success = await analyzeSingleImage(item.id, activeRotatedKey);
-      if (success) {
-        successCount++;
-      }
-      index++;
+    // Start up to CONCURRENCY concurrent worker routines
+    const workers = [];
+    const activeWorkersCount = Math.min(CONCURRENCY, queue.length);
+    for (let i = 0; i < activeWorkersCount; i++) {
+      workers.push(runWorker());
     }
+
+    // Wait for all active worker routines to finish
+    await Promise.all(workers);
 
     setIsAnalyzingAll(false);
     setCooldownRemaining(0);
