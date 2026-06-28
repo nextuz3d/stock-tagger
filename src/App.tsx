@@ -23,6 +23,7 @@ import {
   Info,
   Layers,
   HelpCircle,
+  Activity,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -36,12 +37,16 @@ import { translations } from "./translations";
 const LOCAL_STORAGE_SETTINGS_KEY = "adobe_stock_generator_settings";
 const LOCAL_STORAGE_LANG_KEY = "adobe_stock_generator_lang";
 
+const maskApiKey = (key: string) => {
+  if (!key) return "";
+  const trimmed = key.trim();
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.substring(0, 8)}...${trimmed.substring(trimmed.length - 4)}`;
+};
+
 export default function App() {
   // 1. Language State
-  const [lang, setLang] = useState<"uz" | "en">(() => {
-    const saved = localStorage.getItem(LOCAL_STORAGE_LANG_KEY);
-    return saved === "uz" ? "uz" : "en";
-  });
+  const lang = "en";
 
   // 2. Settings State
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -71,6 +76,69 @@ export default function App() {
   const [tempMaxDimension, setTempMaxDimension] = useState(settings.maxDimension);
   const [tempCustomPrompt, setTempCustomPrompt] = useState(settings.customPrompt || "");
   const [currentPage, setCurrentPage] = useState(1);
+
+  // API Key Daily usage tracker (Max 500 per key per day)
+  const LOCAL_STORAGE_USAGE_KEY = "adobe_stock_generator_api_usage";
+
+  const getTodayDateString = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const [apiUsage, setApiUsage] = useState<Record<string, { count: number; date: string }>>(() => {
+    const saved = localStorage.getItem(LOCAL_STORAGE_USAGE_KEY);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // use empty record
+      }
+    }
+    return {};
+  });
+
+  const apiUsageRef = useRef<Record<string, { count: number; date: string }>>(apiUsage);
+  useEffect(() => {
+    apiUsageRef.current = apiUsage;
+  }, [apiUsage]);
+
+  const getApiKeyUsage = (key: string, usageMap: Record<string, { count: number; date: string }>) => {
+    const cleanKey = key.trim();
+    if (!cleanKey) return 0;
+    const entry = usageMap[cleanKey];
+    const today = getTodayDateString();
+    if (entry && entry.date === today) {
+      return entry.count;
+    }
+    return 0;
+  };
+
+  const isApiKeyExhausted = (key: string) => {
+    const count = getApiKeyUsage(key, apiUsageRef.current);
+    return count >= 500;
+  };
+
+  const incrementApiKeyUsage = (key: string) => {
+    const cleanKey = key.trim();
+    if (!cleanKey) return;
+    const today = getTodayDateString();
+    const currentMap = { ...apiUsageRef.current };
+    const entry = currentMap[cleanKey];
+    let count = 1;
+    if (entry && entry.date === today) {
+      count = entry.count + 1;
+    }
+    const updated = {
+      ...currentMap,
+      [cleanKey]: { count, date: today },
+    };
+    apiUsageRef.current = updated;
+    localStorage.setItem(LOCAL_STORAGE_USAGE_KEY, JSON.stringify(updated));
+    setApiUsage(updated);
+  };
 
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -103,11 +171,6 @@ export default function App() {
   const [newKeywordInput, setNewKeywordInput] = useState("");
 
   const t = translations[lang];
-
-  // Save language
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_LANG_KEY, lang);
-  }, [lang]);
 
   // Request browser Notification permission on load
   useEffect(() => {
@@ -159,7 +222,7 @@ export default function App() {
 
     if (parsedKeys.length > 100) {
       parsedKeys = parsedKeys.slice(0, 100);
-      showToast("error", lang === "uz" ? "Maksimal 100 ta API kalit saqlanishi mumkin. Ortig'i kesildi!" : "A maximum of 100 API keys can be saved. Excess keys were truncated!");
+      showToast("error", "A maximum of 100 API keys can be saved. Excess keys were truncated!");
     }
 
     const updated: AppSettings = {
@@ -180,7 +243,7 @@ export default function App() {
     if (!tempApiKey.trim()) {
       setTestResult({
         success: false,
-        message: lang === "uz" ? "Iltimos, avval API kalitni kiriting." : "Please enter an API key first.",
+        message: "Please enter an API key first.",
       });
       return;
     }
@@ -242,7 +305,7 @@ export default function App() {
     if (keys.length === 0) {
       setTestResult({
         success: false,
-        message: lang === "uz" ? "Iltimos, avval bir nechta API kalitlarini kiriting." : "Please enter multiple API keys first.",
+        message: "Please enter multiple API keys first.",
       });
       return;
     }
@@ -412,6 +475,17 @@ export default function App() {
     const activeModel = settings.customModelId || "gemini-3.5-flash";
     const activeApiKey = overrideApiKey || settings.customApiKey || (settings.customApiKeys && settings.customApiKeys.length > 0 ? settings.customApiKeys[0] : "");
 
+    if (activeApiKey && isApiKeyExhausted(activeApiKey)) {
+      const errMsg = "API key reached daily limit (500/500). Postponed to next day or use another key!";
+
+      setImages((prev) =>
+        prev.map((img) =>
+          img.id === itemId ? { ...img, status: "failed", error: errMsg } : img
+        )
+      );
+      return false;
+    }
+
     try {
       let metadata;
       
@@ -507,7 +581,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
           const errMsg = errData?.error?.message || `HTTP ${response.status}`;
-          throw new Error(lang === "uz" ? `Gemini API xatoligi: ${errMsg}` : `Gemini API Error: ${errMsg}`);
+          throw new Error(`Gemini API Error: ${errMsg}`);
         }
 
         const resData = await response.json();
@@ -546,6 +620,10 @@ Return the response in valid JSON according to the specified schema.${userPrompt
         metadata = await response.json();
       }
 
+      if (activeApiKey) {
+        incrementApiKeyUsage(activeApiKey);
+      }
+
       const durationMs = Date.now() - startTime;
 
       setImages((prev) =>
@@ -581,7 +659,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                 progress: 0,
                 analysisDurationMs: durationMs,
                 analysisModel: activeModel,
-                error: err.message || "Tahlil qilishda kutilmagan xatolik yuz berdi.",
+                error: err.message || "An unexpected error occurred during analysis.",
               }
             : img
         )
@@ -593,11 +671,16 @@ Return the response in valid JSON according to the specified schema.${userPrompt
   };
 
   // Analyze all pending or failed images
-  const startBatchAnalysis = async () => {
-    const queue = images.filter((img) => img.status === "pending" || img.status === "failed");
+  const startBatchAnalysis = async (customImagesList?: typeof images) => {
+    const targetImages = customImagesList || images;
+    const queue = targetImages.filter((img) => img.status === "pending" || img.status === "failed");
     if (queue.length === 0) {
-      showToast("error", lang === "uz" ? "Navbatda yangi yoki xatoli rasmlar mavjud emas." : "No pending or failed images in queue.");
+      showToast("error", "No pending or failed images in queue.");
       return;
+    }
+
+    if (customImagesList) {
+      setImages(customImagesList);
     }
 
     setIsAnalyzingAll(true);
@@ -627,13 +710,35 @@ Return the response in valid JSON according to the specified schema.${userPrompt
 
         const item = queue[currentIndex];
 
-        // 1. Find the key that becomes available earliest
-        let selectedKeyIndex = 0;
+        // Filter keys that are not exhausted (empty key means server-side fallback, always available)
+        const availableKeyIndices = [];
+        for (let i = 0; i < keys.length; i++) {
+          const key = keys[i];
+          if (!key || !isApiKeyExhausted(key)) {
+            availableKeyIndices.push(i);
+          }
+        }
+
+        if (availableKeyIndices.length === 0) {
+          // All keys exhausted!
+          setImages((prev) =>
+            prev.map((img) =>
+              img.id === item.id ? { ...img, status: "failed", error: "All API keys daily limits (500/500) exhausted!" } : img
+            )
+          );
+          cancelBatchRef.current = true;
+          setCancelBatch(true);
+          showToast("error", "All API keys reached daily limit (500/500)!");
+          break;
+        }
+
+        // 1. Find the key among available ones that becomes available earliest
+        let selectedKeyIndex = availableKeyIndices[0];
         let earliestTime = Infinity;
-        for (let i = 0; i < keyAvailableAt.length; i++) {
-          if (keyAvailableAt[i] < earliestTime) {
-            earliestTime = keyAvailableAt[i];
-            selectedKeyIndex = i;
+        for (const idx of availableKeyIndices) {
+          if (keyAvailableAt[idx] < earliestTime) {
+            earliestTime = keyAvailableAt[idx];
+            selectedKeyIndex = idx;
           }
         }
 
@@ -689,12 +794,25 @@ Return the response in valid JSON according to the specified schema.${userPrompt
     setCooldownRemaining(0);
     
     if (!cancelBatchRef.current) {
-      const msg = lang === "uz" 
-        ? `Batch tahlil tugadi. ${successCount} ta rasm muvaffaqiyatli analiz qilindi.` 
-        : `Batch analysis completed. ${successCount} images successfully analyzed.`;
+      const msg = `Batch analysis completed. ${successCount} images successfully analyzed.`;
       showToast("success", msg);
       sendBrowserNotification("Adobe Stock Tag Generator", msg);
     }
+  };
+
+  // Regenerate failed (error) images
+  const regenerateFailedImages = async () => {
+    const failedImages = images.filter((img) => img.status === "failed");
+    if (failedImages.length === 0) {
+      showToast("error", "No failed images to regenerate.");
+      return;
+    }
+
+    const updatedImages = images.map((img) =>
+      img.status === "failed" ? { ...img, status: "pending" as const, error: undefined } : img
+    );
+
+    await startBatchAnalysis(updatedImages);
   };
 
   // Stop/cancel the active batch analysis
@@ -880,18 +998,6 @@ Return the response in valid JSON according to the specified schema.${userPrompt
         </div>
 
         <div className="flex items-center space-x-3 md:space-x-4">
-          {/* Language Toggle */}
-          <button
-            onClick={() => setLang(lang === "uz" ? "en" : "uz")}
-            className="text-xs font-medium text-gray-600 flex items-center gap-1.5 hover:text-black transition"
-            title="Tilni o'zgartirish / Toggle Language"
-          >
-            <Globe className="w-3.5 h-3.5 text-gray-400" />
-            <span className="font-medium uppercase">{lang}</span>
-          </button>
-
-          <div className="h-4 w-px bg-gray-200"></div>
-
           {/* Settings Button */}
           <button
             onClick={() => setShowSettings(!showSettings)}
@@ -1065,6 +1171,91 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                         </div>
                       </div>
                     )}
+
+                    {/* API Keys Daily Usage & Status Tracker */}
+                    {((tempApiKey && tempApiKey.trim()) || (tempApiKeysText && tempApiKeysText.trim())) && (
+                      <div className="md:col-span-2 border-t border-gray-150 pt-3 mt-1">
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5 flex items-center space-x-1.5">
+                          <Activity className="w-3.5 h-3.5 text-black" />
+                          <span>{t.apiKeyUsageLabel}</span>
+                        </label>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3 max-h-48 overflow-y-auto">
+                          {(() => {
+                            // Collect unique non-empty keys to track
+                            const allUniqueKeys: string[] = [];
+                            if (tempApiKey && tempApiKey.trim()) {
+                              allUniqueKeys.push(tempApiKey.trim());
+                            }
+                            const rawKeys = tempApiKeysText
+                              .split("\n")
+                              .map((k) => k.trim())
+                              .filter((k) => k.length > 0);
+                            
+                            for (const k of rawKeys) {
+                              if (!allUniqueKeys.includes(k)) {
+                                allUniqueKeys.push(k);
+                              }
+                            }
+
+                            if (allUniqueKeys.length === 0) return null;
+
+                            return allUniqueKeys.map((key, idx) => {
+                              const count = getApiKeyUsage(key, apiUsage);
+                              const percentage = Math.min((count / 500) * 100, 100);
+                              const isExhausted = count >= 500;
+                              const isRotatedActive = settings.customApiKeys && settings.customApiKeys.length > 0
+                                ? settings.customApiKeys.includes(key)
+                                : settings.customApiKey === key;
+
+                              return (
+                                <div key={idx} className="flex flex-col space-y-1.5 text-xs border-b border-gray-100 last:border-b-0 pb-2 last:pb-0">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-mono text-[11px] text-gray-600 font-medium font-bold">
+                                      #{idx + 1}: {maskApiKey(key)}
+                                    </span>
+                                    <div className="flex items-center space-x-2">
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center space-x-1 ${
+                                        isExhausted 
+                                          ? "bg-red-50 text-red-700 border border-red-100" 
+                                          : "bg-green-50 text-green-700 border border-green-100"
+                                      }`}>
+                                        <span className={`w-1.5 h-1.5 rounded-full mr-1 ${isExhausted ? "bg-red-500" : "bg-green-500 animate-pulse"}`} />
+                                        {isExhausted ? t.apiKeyExhausted : t.apiKeyActive}
+                                      </span>
+                                      <span className="text-gray-400 text-[10px]">
+                                        {isRotatedActive ? (
+                                          <span className="bg-blue-50 text-blue-700 border border-blue-100 font-semibold px-1.5 py-0.5 rounded text-[9px] uppercase">Rotation Active</span>
+                                        ) : (
+                                          <span className="text-[10px] text-gray-400">Forms Key</span>
+                                        )}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="flex items-center space-x-3">
+                                    <div className="flex-1 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                                      <div 
+                                        className={`h-full rounded-full transition-all duration-300 ${
+                                          isExhausted 
+                                            ? "bg-red-500" 
+                                            : percentage > 80 
+                                              ? "bg-amber-500" 
+                                              : "bg-green-500"
+                                        }`}
+                                        style={{ width: `${percentage}%` }}
+                                      />
+                                    </div>
+                                    <span className="font-mono text-[10px] font-semibold text-gray-700 shrink-0">
+                                      {count} / 500 {t.apiKeyCallsToday}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-150">
@@ -1077,7 +1268,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                         rows={3}
                         value={tempCustomPrompt}
                         onChange={(e) => setTempCustomPrompt(e.target.value)}
-                        placeholder={lang === "uz" ? "Masalan: Sarlavha juda qisqa bo'lsin va rasmning hissiy holatiga ko'proq urg'u berilsin..." : "E.g., Keep titles short and put more emphasis on the emotional vibe of the image..."}
+                        placeholder="E.g., Keep titles short and put more emphasis on the emotional vibe of the image..."
                         className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-black focus:outline-none focus:border-black transition resize-y"
                       />
                       <span className="text-[10px] text-gray-400 mt-1 block">
@@ -1088,7 +1279,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                     {/* Compression Max Width */}
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1">
-                        AI tahlil uchun preview max o'lchami (px)
+                        AI preview analysis max resolution (px)
                       </label>
                       <input
                         type="number"
@@ -1183,7 +1374,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
               <div>
-                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Jami rasmlar</span>
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Total Images</span>
                 <p className="font-display text-2xl font-extrabold text-black mt-1 font-mono">{totalCount}</p>
               </div>
               <div className="p-2.5 bg-gray-50 rounded-lg text-gray-400 border border-gray-100">
@@ -1193,7 +1384,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
 
             <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
               <div>
-                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Tahlil qilindi</span>
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Analyzed</span>
                 <p className="font-display text-2xl font-extrabold text-emerald-600 mt-1 font-mono">
                   {completedCount} <span className="text-xs font-normal text-gray-400">/ {totalCount}</span>
                 </p>
@@ -1205,7 +1396,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
 
             <div className="bg-white border border-gray-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
               <div>
-                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Kutilmoqda / Qolganlar</span>
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Pending / Remaining</span>
                 <p className="font-display text-2xl font-extrabold text-amber-600 mt-1 font-mono">
                   {pendingCount}
                 </p>
@@ -1358,6 +1549,17 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                       </button>
                     )}
 
+                    {/* Regenerate Failed Button */}
+                    <button
+                      onClick={regenerateFailedImages}
+                      disabled={isAnalyzingAll || images.filter((img) => img.status === "failed").length === 0}
+                      className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs py-3 px-5 rounded-xl shadow-sm transition-all active:scale-[0.98] disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed uppercase tracking-wider flex items-center justify-center space-x-2"
+                      title="Regenerate all failed/error images"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isAnalyzingAll ? "animate-spin" : ""}`} />
+                      <span>{t.btnRegenerateFailed}</span>
+                    </button>
+
                     {/* Export CSV */}
                     <button
                       onClick={handleExportCSV}
@@ -1365,7 +1567,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                       className="w-full sm:w-auto bg-white border border-gray-200 hover:bg-gray-50 text-black font-bold text-xs py-3 px-5 rounded-xl shadow-sm transition duration-150 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed uppercase tracking-wider flex items-center justify-center space-x-2"
                     >
                       <FileSpreadsheet className="w-3.5 h-3.5 text-gray-650" />
-                      <span>CSV Eksport</span>
+                      <span>{t.btnExport}</span>
                     </button>
                   </div>
                 </div>
@@ -1381,7 +1583,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                   onClick={triggerFileInput}
                   className="mt-4 text-xs font-semibold text-black hover:underline transition underline-offset-4"
                 >
-                  Fayllarni tanlash
+                  Select files
                 </button>
               </div>
             ) : mode === "batch" ? (
@@ -1395,7 +1597,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
 
                 return (
                   <div className="space-y-6">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-3.5">
                       <AnimatePresence>
                         {paginatedImages.map((img) => {
                           const isSelected = selectedImageId === img.id;
@@ -1452,21 +1654,25 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                                 )}
                                 {img.status === "pending" && (
                                   <span className="px-2 py-0.5 rounded-full bg-white text-gray-700 text-[9px] font-extrabold border border-gray-100 shadow-sm">
-                                    Kutish
+                                    Pending
                                   </span>
                                 )}
                               </div>
 
                               {/* Bottom Info Overlay with dynamic gradient */}
-                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/55 to-transparent p-2.5 pt-7 z-10 text-white flex flex-col justify-end">
-                                <p className="text-[10px] font-bold truncate break-all w-full" title={img.name}>
-                                  {img.name}
-                                </p>
-
-                                {/* Metadata Summary if completed */}
-                                {img.status === "completed" && img.metadata && (
-                                  <p className="text-[9px] text-gray-300 line-clamp-1 mt-0.5 font-medium opacity-90">
-                                    {img.metadata.title}
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/75 to-transparent p-2.5 pt-7 z-10 text-white flex flex-col justify-end">
+                                {isCompleted && img.metadata?.title ? (
+                                  <>
+                                    <p className="text-[11px] font-bold line-clamp-2 leading-snug text-white" title={img.metadata.title}>
+                                      {img.metadata.title}
+                                    </p>
+                                    <p className="text-[8px] text-gray-400 truncate mt-0.5" title={img.name}>
+                                      {img.name}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <p className="text-[10px] font-bold truncate break-all w-full" title={img.name}>
+                                    {img.name}
                                   </p>
                                 )}
 
@@ -1525,7 +1731,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                     {images.length > ITEMS_PER_PAGE && (
                       <div className="flex items-center justify-between border-t border-gray-150 pt-4 mt-6">
                         <p className="text-xs text-gray-500 font-mono">
-                          {lang === "uz" ? "Ko'rsatilmoqda" : "Showing"} <span className="font-semibold text-black">{startIndex + 1}</span> - <span className="font-semibold text-black">{Math.min(endIndex, images.length)}</span> jami <span className="font-semibold text-black">{images.length}</span> tadan
+                          Showing <span className="font-semibold text-black">{startIndex + 1}</span> - <span className="font-semibold text-black">{Math.min(endIndex, images.length)}</span> of <span className="font-semibold text-black">{images.length}</span>
                         </p>
                         <div className="flex items-center space-x-2">
                           <button
@@ -1534,7 +1740,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                             className="px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed text-xs font-bold uppercase transition flex items-center space-x-1"
                           >
                             <ChevronLeft className="w-3.5 h-3.5" />
-                            <span>{lang === "uz" ? "Avvalgi" : "Prev"}</span>
+                            <span>Prev</span>
                           </button>
                           <span className="text-xs font-bold font-mono px-3 text-black">
                             {currentPage} / {totalPages}
@@ -1544,7 +1750,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                             onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                             className="px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed text-xs font-bold uppercase transition flex items-center space-x-1"
                           >
-                            <span>{lang === "uz" ? "Keyingi" : "Next"}</span>
+                            <span>Next</span>
                             <ChevronRight className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -1652,7 +1858,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                         <div className="space-y-4">
                           <h3 className="text-sm font-bold text-black border-b border-gray-150 pb-2 flex items-center space-x-1.5 uppercase tracking-wider">
                             <Sparkles className="w-4 h-4 text-gray-500" />
-                            <span>Tahlil natijalari (Ingliz tilida)</span>
+                            <span>Analysis Results (English)</span>
                           </h3>
 
                           {/* Title */}
@@ -1666,8 +1872,8 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                               className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-black focus:outline-none focus:border-black transition"
                             />
                             <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-                              <span>Sotilish darajasi yuqori sarlavha.</span>
-                              <span>{selectedImage.metadata.title.length}/75 belgi</span>
+                              <span>High-converting title in English.</span>
+                              <span>{selectedImage.metadata.title.length}/75 chars</span>
                             </div>
                           </div>
 
@@ -1681,7 +1887,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                             >
                               {ADOBE_STOCK_CATEGORIES.map((cat) => (
                                 <option key={cat.id} value={cat.id}>
-                                  {cat.id}: {lang === "uz" ? cat.nameUz : cat.nameEn}
+                                  {cat.id}: {cat.nameEn}
                                 </option>
                               ))}
                             </select>
@@ -1698,9 +1904,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                               className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-black focus:outline-none focus:border-black transition"
                             />
                             <div className="text-[10px] text-gray-400 mt-1">
-                              {lang === "uz" 
-                                ? "Model yoki mulk relizi nomlarini kiritishingiz mumkin (masalan, \"John Doe, Jane Doe\")." 
-                                : "You can specify model or property release names (e.g., \"John Doe, Jane Doe\")."}
+                              You can specify model or property release names (e.g., "John Doe, Jane Doe").
                             </div>
                           </div>
 
@@ -1761,33 +1965,33 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                         <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
                           <Loader2 className="w-8 h-8 text-black animate-spin" />
                           <div className="space-y-1">
-                            <p className="text-sm font-semibold text-gray-900">Sun'iy intellekt tahlil qilmoqda...</p>
-                            <p className="text-xs text-gray-450 leading-relaxed">Gemini rasm tafsilotlarini o'rganmoqda va taglarni ingliz tilida shakllantirmoqda.</p>
+                            <p className="text-sm font-semibold text-gray-900">AI is analyzing...</p>
+                            <p className="text-xs text-gray-450 leading-relaxed">Gemini is studying image details and generating tags in English.</p>
                           </div>
                         </div>
                       ) : selectedImage.status === "failed" ? (
                         <div className="flex flex-col items-center justify-center py-16 text-center space-y-3 bg-rose-50 border border-rose-100 rounded-xl p-6">
                           <AlertCircle className="w-8 h-8 text-rose-600" />
-                          <h4 className="text-sm font-bold text-gray-900">Analiz qilishda xatolik yuz berdi</h4>
+                          <h4 className="text-sm font-bold text-gray-900">An error occurred during analysis</h4>
                           <p className="text-xs text-rose-700 leading-relaxed">{selectedImage.error}</p>
                           <button
                             onClick={() => analyzeSingleImage(selectedImage.id)}
                             className="mt-2 text-xs font-bold bg-white border border-rose-200 text-rose-700 px-3 py-1.5 rounded-lg hover:bg-rose-50 transition uppercase tracking-wider"
                           >
-                            Qayta urinish
+                            Try Again
                           </button>
                         </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center py-24 text-center text-gray-400">
                           <Sparkles className="w-8 h-8 text-gray-300 mb-3" />
-                          <p className="text-xs">Ushbu rasm hali analiz qilinmagan. Yuqoridagi "AI Analizni boshlash" tugmasini bosing.</p>
+                          <p className="text-xs">This image has not been analyzed yet. Click the "Start Analysis" button above.</p>
                         </div>
                       )}
                     </div>
                   </div>
                 ) : (
                   <div className="text-center py-20 text-gray-400">
-                    <p className="text-sm">Rasm tahlilini ko'rish uchun avval chap tomondan rasm yuklang.</p>
+                    <p className="text-sm">To view image analysis, please upload an image from the left side first.</p>
                   </div>
                 )}
               </div>
@@ -1850,9 +2054,9 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                             className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-black focus:outline-none focus:border-black transition resize-none leading-relaxed"
                           />
                           <div className="flex justify-between text-[9px] text-gray-400 mt-1">
-                            <span>Sarlavha ingliz tilida.</span>
+                            <span>Title in English.</span>
                             <span className={selectedImage.metadata.title.length > 75 ? "text-amber-600 font-semibold" : "text-gray-400"}>
-                              {selectedImage.metadata.title.length}/75 belgi
+                              {selectedImage.metadata.title.length}/75 chars
                             </span>
                           </div>
                         </div>
@@ -1867,7 +2071,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                           >
                             {ADOBE_STOCK_CATEGORIES.map((cat) => (
                               <option key={cat.id} value={cat.id}>
-                                {cat.id}: {lang === "uz" ? cat.nameUz : cat.nameEn}
+                                {cat.id}: {cat.nameEn}
                               </option>
                             ))}
                           </select>
@@ -1884,9 +2088,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                             className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 text-xs text-black focus:outline-none focus:border-black transition"
                           />
                           <div className="text-[9px] text-gray-400 mt-1">
-                            {lang === "uz" 
-                              ? "Model yoki mulk relizi nomlari (masalan: John Doe, Jane Doe)." 
-                              : "Model or property release names (e.g. John Doe, Jane Doe)."}
+                            Model or property release names (e.g. John Doe, Jane Doe).
                           </div>
                         </div>
 
@@ -1963,18 +2165,18 @@ Return the response in valid JSON according to the specified schema.${userPrompt
                           onClick={() => analyzeSingleImage(selectedImage.id)}
                           className="bg-white border border-rose-200 hover:bg-rose-50 text-rose-700 text-[10px] px-3 py-1.5 rounded transition uppercase tracking-wider font-bold"
                         >
-                          Qayta urinish
+                          Try Again
                         </button>
                       </div>
                     ) : (
                       <div className="text-center py-16 space-y-2 border border-dashed border-gray-200 rounded-xl">
                         <Sparkles className="w-6 h-6 text-gray-300 mx-auto" />
-                        <p className="text-xs text-gray-450">Rasm hali analiz qilinmadi</p>
+                        <p className="text-xs text-gray-450">Image has not been analyzed yet</p>
                         <button
                           onClick={() => analyzeSingleImage(selectedImage.id)}
                           className="text-xs text-black hover:underline font-semibold"
                         >
-                          Hozir tahlil qilish
+                          Analyze now
                         </button>
                       </div>
                     )}
@@ -2000,7 +2202,7 @@ Return the response in valid JSON according to the specified schema.${userPrompt
             <span>Created with Gemini 3.5 AI</span>
           </div>
           <div>
-            <p>O'zbekistonlik ijodkorlar va sotuvchilar uchun maxsus tayyorlandi. © 2026</p>
+            <p>Designed for Adobe Stock creators and contributors. © 2026</p>
           </div>
         </div>
       </footer>
