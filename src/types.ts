@@ -29,6 +29,7 @@ export interface AppSettings {
   customApiKeys?: string[]; // Array of keys for rotation/distribution
   customModelId: string;
   maxDimension: number; // Max width or height for AI preview compression (default: 1024)
+  customPrompt?: string; // Custom instruction for AI analysis
 }
 
 export const ADOBE_STOCK_CATEGORIES: { id: number; nameUz: string; nameEn: string }[] = [

@@ -14,6 +14,7 @@ import {
   Grid,
   AlertCircle,
   X,
+  ChevronLeft,
   ChevronRight,
   Sparkles,
   Globe,
@@ -68,6 +69,8 @@ export default function App() {
   const [tempApiKeysText, setTempApiKeysText] = useState(() => (settings.customApiKeys || []).join("\n"));
   const [tempModelId, setTempModelId] = useState(settings.customModelId);
   const [tempMaxDimension, setTempMaxDimension] = useState(settings.maxDimension);
+  const [tempCustomPrompt, setTempCustomPrompt] = useState(settings.customPrompt || "");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -159,6 +162,7 @@ export default function App() {
       customApiKeys: parsedKeys,
       customModelId: tempModelId.trim() || "gemini-3.5-flash",
       maxDimension: Number(tempMaxDimension) || 1024,
+      customPrompt: tempCustomPrompt.trim(),
     };
     setSettings(updated);
     localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(updated));
@@ -409,6 +413,11 @@ export default function App() {
       // If a custom API key is present, execute direct client-side call (supports Netlify, Vercel, static hosting)
       if (activeApiKey) {
         const cleanBase64 = item.compressedBase64.replace(/^data:image\/\w+;base64,/, "");
+        
+        const userPromptSnippet = settings.customPrompt && settings.customPrompt.trim()
+          ? `\n\nADDITIONAL USER INSTRUCTIONS (CRITICAL): ${settings.customPrompt.trim()}`
+          : "";
+
         const promptText = `Analyze this image and provide metadata optimized for Adobe Stock marketplace.
 The output MUST be in English because Adobe Stock is a global marketplace and recommends metadata in English to maximize sales.
 
@@ -438,7 +447,7 @@ Guidelines:
    20 (Transport): Cars, airplanes, trains, boats, bicycles, roads, public transit, engines, tires, or vehicle-focused closeups.
    21 (Travel): Landmarks (Eiffel Tower, pyramids, etc.), suitcases, passport, maps, tourists exploring, scenic vacation spots, or travel-specific experiences.
 
-Return the response in valid JSON according to the specified schema.`;
+Return the response in valid JSON according to the specified schema.${userPromptSnippet}`;
 
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${activeApiKey}`, {
           method: "POST",
@@ -520,6 +529,7 @@ Return the response in valid JSON according to the specified schema.`;
             mimeType: "image/jpeg",
             customApiKey: activeApiKey,
             customModelId: settings.customModelId,
+            customPrompt: settings.customPrompt,
           }),
         });
 
@@ -681,6 +691,7 @@ Return the response in valid JSON according to the specified schema.`;
     if (window.confirm("Barcha rasmlarni ro'yxatdan o'chirmoqchimisiz?")) {
       setImages([]);
       setSelectedImageId(null);
+      setCurrentPage(1);
       showToast("success", "Ro'yxat tozalandi.");
     }
   };
@@ -1025,6 +1036,23 @@ Return the response in valid JSON according to the specified schema.`;
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-150">
+                    {/* Custom Prompt (Text area) */}
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        {t.customPromptLabel}
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={tempCustomPrompt}
+                        onChange={(e) => setTempCustomPrompt(e.target.value)}
+                        placeholder={lang === "uz" ? "Masalan: Sarlavha juda qisqa bo'lsin va rasmning hissiy holatiga ko'proq urg'u berilsin..." : "E.g., Keep titles short and put more emphasis on the emotional vibe of the image..."}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-black focus:outline-none focus:border-black transition resize-y"
+                      />
+                      <span className="text-[10px] text-gray-400 mt-1 block">
+                        {t.customPromptDesc}
+                      </span>
+                    </div>
+
                     {/* Compression Max Width */}
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1">
@@ -1052,6 +1080,7 @@ Return the response in valid JSON according to the specified schema.`;
                           setTempApiKeysText("");
                           setTempModelId("gemini-3.5-flash");
                           setTempMaxDimension(512);
+                          setTempCustomPrompt("");
                           setTestResult(null);
                         }}
                         className="px-3 py-2 text-gray-500 hover:text-black text-xs font-medium transition"
@@ -1325,182 +1354,173 @@ Return the response in valid JSON according to the specified schema.`;
               </div>
             ) : mode === "batch" ? (
               /* BATCH MODE: GRID OF THUMBNAILS */
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <AnimatePresence>
-                  {images.map((img) => {
-                    const isSelected = selectedImageId === img.id;
-                    const isCompleted = img.status === "completed";
-                    const isFailed = img.status === "failed";
-                    const isAnalyzing = img.status === "analyzing";
+              (() => {
+                const ITEMS_PER_PAGE = 100;
+                const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+                const endIndex = startIndex + ITEMS_PER_PAGE;
+                const paginatedImages = images.slice(startIndex, endIndex);
+                const totalPages = Math.ceil(images.length / ITEMS_PER_PAGE);
 
-                    return (
-                      <motion.div
-                        key={img.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setSelectedImageId(img.id)}
-                        className={`border rounded-xl overflow-hidden cursor-pointer transition duration-200 flex flex-col relative ${
-                          isSelected
-                            ? "border-black bg-white shadow-md"
-                            : "border-gray-200 bg-white hover:border-gray-300"
-                        }`}
-                      >
-                        {/* Image wrapper */}
-                        <div className="relative aspect-video w-full bg-gray-50 flex items-center justify-center overflow-hidden border-b border-gray-100">
-                          {img.previewUrl ? (
-                            <img
-                              src={img.previewUrl}
-                              alt={img.name}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center justify-center space-y-1.5 py-8">
-                              <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
-                              <span className="text-[10px] text-gray-500 font-medium">Compressing...</span>
-                            </div>
-                          )}
+                return (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
+                      <AnimatePresence>
+                        {paginatedImages.map((img) => {
+                          const isSelected = selectedImageId === img.id;
+                          const isCompleted = img.status === "completed";
+                          const isFailed = img.status === "failed";
+                          const isAnalyzing = img.status === "analyzing";
 
-                          {/* Top Status Badge */}
-                          <div className="absolute top-2.5 right-2.5 z-10">
-                            {isCompleted && (
-                              <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-250 text-emerald-700 text-[10px] font-semibold flex items-center gap-1 backdrop-blur-md">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                {t.statusCompleted}
-                              </span>
-                            )}
-                            {isFailed && (
-                              <span className="px-2.5 py-0.5 rounded-full bg-rose-50 border border-rose-250 text-rose-700 text-[10px] font-semibold flex items-center gap-1 backdrop-blur-md">
-                                <AlertCircle className="w-3 h-3 text-rose-500" />
-                                {t.statusFailed}
-                              </span>
-                            )}
-                            {isAnalyzing && (
-                              <span className="px-2.5 py-0.5 rounded-full bg-black text-white text-[10px] font-semibold flex items-center gap-1 backdrop-blur-md">
-                                <Loader2 className="w-3 h-3 text-white animate-spin" />
-                                AI Analiz...
-                              </span>
-                            )}
-                            {img.status === "pending" && (
-                              <span className="px-2.5 py-0.5 rounded-full bg-white border border-gray-200 text-gray-600 text-[10px] font-semibold backdrop-blur-md">
-                                {t.statusPending}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Quick single analysis trigger */}
-                          {img.status === "pending" && (
-                            <button
-                              onClick={(e) => {
-                                  e.stopPropagation();
-                                  analyzeSingleImage(img.id);
-                              }}
-                              className="absolute bottom-2 right-2 p-1.5 rounded-lg bg-black hover:bg-gray-900 text-white shadow-sm transition opacity-0 group-hover:opacity-100 md:opacity-100"
-                              title="Analiz qilish"
+                          return (
+                            <motion.div
+                              key={img.id}
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.95 }}
+                              onClick={() => setSelectedImageId(img.id)}
+                              className={`border rounded-xl overflow-hidden cursor-pointer transition-all duration-200 aspect-square w-full relative flex flex-col justify-end group ${
+                                isSelected
+                                  ? "border-black ring-2 ring-black/10 bg-white shadow-md scale-[0.98]"
+                                  : "border-gray-200 bg-white hover:border-gray-400 hover:shadow-sm"
+                              }`}
                             >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Text and stats */}
-                        <div className="p-3.5 flex-1 flex flex-col justify-between">
-                          <div>
-                            <div className="flex items-start justify-between space-x-2">
-                              <p className="text-xs font-bold text-gray-900 line-clamp-1 break-all" title={img.name}>
-                                {img.name}
-                              </p>
-                              <div className="flex items-center space-x-1 shrink-0">
-                                {(img.status === "completed" || img.status === "failed") && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      analyzeSingleImage(img.id);
-                                    }}
-                                    className="text-gray-400 hover:text-black p-1 hover:bg-gray-100 rounded transition"
-                                    title={t.btnRegenerate}
-                                  >
-                                    <RefreshCw className="w-3.5 h-3.5" />
-                                  </button>
+                              {/* The Image (Background, object-cover) */}
+                              <div className="absolute inset-0 bg-gray-50 flex items-center justify-center overflow-hidden">
+                                {img.previewUrl ? (
+                                  <img
+                                    src={img.previewUrl}
+                                    alt={img.name}
+                                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                  />
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center space-y-1">
+                                    <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+                                    <span className="text-[9px] text-gray-400 font-medium">Compressing...</span>
+                                  </div>
                                 )}
-                                <button
-                                  onClick={(e) => removeImage(img.id, e)}
-                                  className="text-gray-400 hover:text-rose-600 p-1 hover:bg-gray-50 rounded transition"
-                                  title={t.btnClear}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
                               </div>
-                            </div>
 
-                            {/* Size stats comparison */}
-                            <div className="flex items-center space-x-1.5 mt-1 font-mono text-[10px] text-gray-500">
-                              <span>{img.originalSizeMb} MB</span>
-                              <ChevronRight className="w-3 h-3 text-gray-300" />
-                              <span className="text-gray-900 font-semibold">{img.compressedSizeKb} KB</span>
-                              <span className="text-emerald-700 font-semibold bg-emerald-50 px-1 py-0.5 rounded border border-emerald-100">
-                                -{Math.round((1 - (img.compressedSizeKb / 1024) / img.originalSizeMb) * 100)}%
-                              </span>
-                            </div>
-
-                            {/* Analysis metadata: Duration & Model */}
-                            {(img.status === "completed" || img.status === "failed") && img.analysisDurationMs && (
-                              <div className="flex items-center space-x-1.5 mt-1.5 text-[9px] text-gray-500 font-mono">
-                                <span className="bg-gray-50 text-gray-600 px-1.5 py-0.5 rounded border border-gray-150 font-bold">
-                                  {t.analysisTime}: {(img.analysisDurationMs / 1000).toFixed(1)}s
-                                </span>
-                                <span className="bg-gray-50 text-gray-600 px-1.5 py-0.5 rounded border border-gray-150 font-bold truncate max-w-[120px]">
-                                  {img.analysisModel || "gemini-3.5-flash"}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Progress/Error bar */}
-                          {img.status === "analyzing" && (
-                            <div className="mt-3">
-                              <div className="w-full h-1 bg-gray-100 rounded-full overflow-hidden">
-                                <motion.div
-                                  initial={{ width: "10%" }}
-                                  animate={{ width: "90%" }}
-                                  transition={{ duration: 5, ease: "easeOut" }}
-                                  className="h-full bg-black rounded-full"
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          {isFailed && img.error && (
-                            <p className="text-[10px] text-rose-700 mt-2 line-clamp-1 bg-rose-50 px-2 py-1 rounded border border-rose-100">
-                              {img.error}
-                            </p>
-                          )}
-
-                          {isCompleted && img.metadata && (
-                            <div className="mt-2.5 pt-2 border-t border-gray-100">
-                              <p className="text-xs text-gray-800 font-medium line-clamp-1">
-                                {img.metadata.title}
-                              </p>
-                              <div className="flex flex-wrap gap-1 mt-1.5">
-                                {img.metadata.keywords.slice(0, 4).map((kw, idx) => (
-                                  <span key={idx} className="text-[9px] bg-gray-50 text-gray-650 px-1.5 py-0.5 rounded border border-gray-200">
-                                    {kw}
+                              {/* Status badge in absolute top right */}
+                              <div className="absolute top-2 right-2 z-15 flex flex-col gap-1 items-end">
+                                {isCompleted && (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[9px] font-extrabold flex items-center gap-0.5 shadow-sm">
+                                    ✓ OK
                                   </span>
-                                ))}
-                                {img.metadata.keywords.length > 4 && (
-                                  <span className="text-[9px] text-black px-1 py-0.5 font-bold">
-                                    +{img.metadata.keywords.length - 4}
+                                )}
+                                {isFailed && (
+                                  <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[9px] font-extrabold flex items-center gap-0.5 shadow-sm">
+                                    ✕ ERR
+                                  </span>
+                                )}
+                                {isAnalyzing && (
+                                  <span className="px-2 py-0.5 rounded-full bg-black text-white text-[9px] font-extrabold flex items-center gap-1 shadow-sm">
+                                    <Loader2 className="w-2.5 h-2.5 text-white animate-spin" />
+                                    AI...
+                                  </span>
+                                )}
+                                {img.status === "pending" && (
+                                  <span className="px-2 py-0.5 rounded-full bg-white text-gray-700 text-[9px] font-extrabold border border-gray-100 shadow-sm">
+                                    Kutish
                                   </span>
                                 )}
                               </div>
-                            </div>
-                          )}
+
+                              {/* Bottom Info Overlay with dynamic gradient */}
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/55 to-transparent p-2.5 pt-7 z-10 text-white flex flex-col justify-end">
+                                <p className="text-[10px] font-bold truncate break-all w-full" title={img.name}>
+                                  {img.name}
+                                </p>
+
+                                {/* Metadata Summary if completed */}
+                                {img.status === "completed" && img.metadata && (
+                                  <p className="text-[9px] text-gray-300 line-clamp-1 mt-0.5 font-medium opacity-90">
+                                    {img.metadata.title}
+                                  </p>
+                                )}
+
+                                {/* Size & details */}
+                                <div className="flex items-center justify-between mt-1 text-[9px] text-gray-300 font-mono">
+                                  <div className="flex items-center space-x-1">
+                                    <span>{img.originalSizeMb}MB</span>
+                                    <span>→</span>
+                                    <span className="text-emerald-400 font-semibold">{img.compressedSizeKb}K</span>
+                                  </div>
+
+                                  <div className="flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                    {img.status === "pending" && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          analyzeSingleImage(img.id);
+                                        }}
+                                        className="p-1 rounded bg-white hover:bg-gray-100 text-black shadow-sm transition flex items-center justify-center"
+                                        title="Analiz"
+                                      >
+                                        <Play className="w-2.5 h-2.5 fill-current" />
+                                      </button>
+                                    )}
+
+                                    {(img.status === "completed" || img.status === "failed") && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          analyzeSingleImage(img.id);
+                                        }}
+                                        className="text-white hover:text-emerald-300 p-0.5 transition"
+                                        title={t.btnRegenerate}
+                                      >
+                                        <RefreshCw className="w-2.5 h-2.5" />
+                                      </button>
+                                    )}
+
+                                    <button
+                                      onClick={(e) => removeImage(img.id, e)}
+                                      className="text-white hover:text-rose-400 p-0.5 transition"
+                                      title={t.btnClear}
+                                    >
+                                      <Trash2 className="w-2.5 h-2.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </AnimatePresence>
+                    </div>
+
+                    {/* PAGINATION CONTROLS */}
+                    {images.length > ITEMS_PER_PAGE && (
+                      <div className="flex items-center justify-between border-t border-gray-150 pt-4 mt-6">
+                        <p className="text-xs text-gray-500 font-mono">
+                          {lang === "uz" ? "Ko'rsatilmoqda" : "Showing"} <span className="font-semibold text-black">{startIndex + 1}</span> - <span className="font-semibold text-black">{Math.min(endIndex, images.length)}</span> jami <span className="font-semibold text-black">{images.length}</span> tadan
+                        </p>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            disabled={currentPage === 1}
+                            onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                            className="px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed text-xs font-bold uppercase transition flex items-center space-x-1"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            <span>{lang === "uz" ? "Avvalgi" : "Prev"}</span>
+                          </button>
+                          <span className="text-xs font-bold font-mono px-3 text-black">
+                            {currentPage} / {totalPages}
+                          </span>
+                          <button
+                            disabled={currentPage >= totalPages}
+                            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                            className="px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed text-xs font-bold uppercase transition flex items-center space-x-1"
+                          >
+                            <span>{lang === "uz" ? "Keyingi" : "Next"}</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                      </motion.div>
-                    );
-                  })}
-                </AnimatePresence>
-              </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
             ) : (
               /* SINGLE RECONSTRUCTED LAYOUT */
               <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden p-6 shadow-sm">

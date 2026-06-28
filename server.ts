@@ -17,7 +17,7 @@ async function startServer() {
   // API Route: Analyze Image
   app.post("/api/analyze-image", async (req: express.Request, res: express.Response): Promise<void> => {
     try {
-      const { imageBase64, mimeType, customApiKey, customModelId } = req.body;
+      const { imageBase64, mimeType, customApiKey, customModelId, customPrompt } = req.body;
 
       if (!imageBase64) {
         res.status(400).json({ error: "Rasm ma'lumotlari (base64) topilmadi." });
@@ -58,6 +58,10 @@ async function startServer() {
       };
 
       // 4. Prompt for Adobe Stock metadata guidelines
+      const userPromptSnippet = customPrompt && typeof customPrompt === "string" && customPrompt.trim()
+        ? `\n\nADDITIONAL USER INSTRUCTIONS (CRITICAL): ${customPrompt.trim()}`
+        : "";
+
       const promptText = `Analyze this image and provide metadata optimized for Adobe Stock marketplace.
 The output MUST be in English because Adobe Stock is a global marketplace and recommends metadata in English to maximize sales.
 
@@ -74,20 +78,20 @@ Guidelines:
    7 (Food): Meals, dishes, ingredients, vegetables, fruits, baking, cooking, restaurants, culinary arts, or closeups of food plates.
    8 (Graphic Resources): Abstract backgrounds, textures, patterns, wallpapers, icons, isolated 3D graphics, frames, vectors, or mockups where the focus is the graphical element itself.
    9 (Religions): Religious objects, shrines, sacred texts, or scenes focusing purely on faith (if not covered by general Culture).
-   10 (Industry): Factories, construction sites, heavy machinery, hand tools, manufacturing lines, warehouse operations, workers with safety gear, or engineering.
-   11 (Landscapes): Mountain ranges, oceans, beaches, forests, sunsets, sunrises, wilderness, deserts, rivers, or scenery without any prominent human activity or city focus.
-   12 (Lifestyle): Everyday life, family activities, friends hanging out, domestic scenes, hobbies, casual portraits showing people doing things in their daily environment.
-   13 (People): Portraits, closeups of faces, hands, bodies, diverse individuals or groups where the main focus is the human subject itself, not their specific lifestyle activity.
-   14 (Plants and Flowers): Macro shots of flowers, leaves, trees, gardens, houseplants, botanical details, or flora.
-   15 (Culture and Religion): Art galleries, painting tools, musical instruments, traditional costumes, folk dances, historical artifacts, libraries, books, theaters, or cultural festivals.
-   16 (Science): Laboratories, medical research, doctors, healthcare gear, microscopes, space, planets, DNA models, molecules, or scientific tests.
-   17 (Social Issues): Poverty, protests, politics, human rights, social conflicts, accessibility, discrimination, or community issues.
-   18 (Sports): Athletics, gyms, exercises, fitness, running, games (football, basketball, tennis), yoga, sports equipment, or sports venues.
-   19 (Technology): Modern devices (smartphones, VR headsets, microchips), AI, programming, virtual screens, cloud computing, cyber security, robots, or futuristic concepts.
-   20 (Transport): Cars, airplanes, trains, boats, bicycles, roads, public transit, engines, tires, or vehicle-focused closeups.
-   21 (Travel): Landmarks (Eiffel Tower, pyramids, etc.), suitcases, passport, maps, tourists exploring, scenic vacation spots, or travel-specific experiences.
+  10 (Industry): Factories, construction sites, heavy machinery, hand tools, manufacturing lines, warehouse operations, workers with safety gear, or engineering.
+  11 (Landscapes): Mountain ranges, oceans, beaches, forests, sunsets, sunrises, wilderness, deserts, rivers, or scenery without any prominent human activity or city focus.
+  12 (Lifestyle): Everyday life, family activities, friends hanging out, domestic scenes, hobbies, casual portraits showing people doing things in their daily environment.
+  13 (People): Portraits, closeups of faces, hands, bodies, diverse individuals or groups where the main focus is the human subject itself, not their specific lifestyle activity.
+  14 (Plants and Flowers): Macro shots of flowers, leaves, trees, gardens, houseplants, botanical details, or flora.
+  15 (Culture and Religion): Art galleries, painting tools, musical instruments, traditional costumes, folk dances, historical artifacts, libraries, books, theaters, or cultural festivals.
+  16 (Science): Laboratories, medical research, doctors, healthcare gear, microscopes, space, planets, DNA models, molecules, or scientific tests.
+  17 (Social Issues): Poverty, protests, politics, human rights, social conflicts, accessibility, discrimination, or community issues.
+  18 (Sports): Athletics, gyms, exercises, fitness, running, games (football, basketball, tennis), yoga, sports equipment, or sports venues.
+  19 (Technology): Modern devices (smartphones, VR headsets, microchips), AI, programming, virtual screens, cloud computing, cyber security, robots, or futuristic concepts.
+  20 (Transport): Cars, airplanes, trains, boats, bicycles, roads, public transit, engines, tires, or vehicle-focused closeups.
+  21 (Travel): Landmarks (Eiffel Tower, pyramids, etc.), suitcases, passport, maps, tourists exploring, scenic vacation spots, or travel-specific experiences.
 
-Return the response in valid JSON according to the specified schema.`;
+Return the response in valid JSON according to the specified schema.${userPromptSnippet}`;
 
       // 5. Call Gemini API with structured output
       const response = await ai.models.generateContent({

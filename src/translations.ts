@@ -65,6 +65,8 @@ export const translations = {
     rotatingKeysNotice: "API kalitlar navbatma-navbat almashmoqda",
     activeKeyIndex: "Faol kalit tartibi",
     testAllKeys: "Barcha kalitlarni tekshirish",
+    customPromptLabel: "AI Buyrug'i (Custom Prompt - ixtiyoriy)",
+    customPromptDesc: "Rasmlarni analiz qilishda AI ga qo'shimcha buyruq yoki ko'rsatma bering (masalan: 'Ko'proq san'at uslubiga e'tibor qarat' yoki 'Sarlavhada brend nomlarini ishlatma'). Bo'sh qolsa, standart buyruq ishlatiladi.",
   },
   en: {
     appTitle: "Adobe Stock Tag Generator",
@@ -132,5 +134,7 @@ export const translations = {
     rotatingKeysNotice: "API keys are rotating sequentially",
     activeKeyIndex: "Active key index",
     testAllKeys: "Test All Keys",
+    customPromptLabel: "Custom AI Prompt (Optional)",
+    customPromptDesc: "Provide custom instructions or guidelines for the image analysis (e.g., 'Focus more on artistic style' or 'Do not use brand names in the title'). If left empty, the standard default prompt is used.",
   }
 };
