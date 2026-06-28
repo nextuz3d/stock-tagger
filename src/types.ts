@@ -20,10 +20,13 @@ export interface ImageItem {
   progress: number; // 0 to 100 for visual loading bar
   error?: string;
   metadata?: ImageMetadata;
+  analysisDurationMs?: number;
+  analysisModel?: string;
 }
 
 export interface AppSettings {
   customApiKey: string;
+  customApiKeys?: string[]; // Array of keys for rotation/distribution
   customModelId: string;
   maxDimension: number; // Max width or height for AI preview compression (default: 1024)
 }
